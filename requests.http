@@ -1,0 +1,120 @@
+# Коллекция запросов к сервису заметок
+#
+# Открывается плагином REST Client (VS Code) или любым инструментом,
+# понимающим формат .http. Ожидаемые ответы записаны рядом с каждым запросом
+# ДО прогона — это и есть сверка обещанного с фактическим.
+#
+# Перед прогоном: npm start (порт 3000).
+# Хранилище при этом — рабочий data/notes.json, а не временный файл.
+
+@baseUrl = http://localhost:3000
+
+### 1. Пустое хранилище — не ошибка
+# Ожидается: 200
+# {"items": [], "total": 0, "limit": 20, "offset": 0}
+GET {{baseUrl}}/notes
+
+### 2. Успешное создание: теги приходят грязными, сохраняются нормализованными
+# Ожидается: 201
+# tags = ["работа"] — trim, нижний регистр, дубли схлопнуты, пустая строка выброшена
+# id — UUID v4, createdAt == updatedAt, text по умолчанию ""
+POST {{baseUrl}}/notes
+Content-Type: application/json
+Idempotency-Key: demo-1
+
+{
+  "title": "Купить молоко",
+  "text": "И хлеб тоже",
+  "tags": ["  Работа ", "работа", "РАБОТА", ""]
+}
+
+### 3. Ретрай: тот же ключ, то же тело
+# Ожидается: 200 (не 201) и ТА ЖЕ заметка — тот же id и тот же createdAt.
+# Число заметок не увеличивается.
+POST {{baseUrl}}/notes
+Content-Type: application/json
+Idempotency-Key: demo-1
+
+{
+  "title": "Купить молоко",
+  "text": "И хлеб тоже",
+  "tags": ["  Работа ", "работа", "РАБОТА", ""]
+}
+
+### 4. ОШИБКА: тот же ключ, другое тело
+# Ожидается: 409
+# {"error": {"code": "idempotency_key_conflict", "message": "...", "field": "Idempotency-Key"}}
+POST {{baseUrl}}/notes
+Content-Type: application/json
+Idempotency-Key: demo-1
+
+{
+  "title": "Совсем другая заметка"
+}
+
+### 5. Фильтр по тегам работает по И
+# Ожидается: 200, в items только заметки, у которых есть ОБА тега.
+GET {{baseUrl}}/notes?tags=работа,срочное
+
+### 6. ОШИБКА: опечатка в имени поля
+# Ожидается: 400
+# {"error": {"code": "unknown_field", "message": "titel: неизвестное поле", "field": "titel"}}
+POST {{baseUrl}}/notes
+Content-Type: application/json
+
+{
+  "titel": "Опечатка вместо title"
+}
+
+### 7. ОШИБКА: обязательное поле не пришло
+# Ожидается: 400
+# {"error": {"code": "validation_error", "message": "title: обязательное поле", "field": "title"}}
+POST {{baseUrl}}/notes
+Content-Type: application/json
+
+{
+  "text": "Текст без заголовка"
+}
+
+### 8. ОШИБКА: limit вне границ
+# Ожидается: 400
+# {"error": {"code": "validation_error", "message": "limit: допустимо от 1 до 100", "field": "limit"}}
+GET {{baseUrl}}/notes?limit=0
+
+### 9. ОШИБКА: неизвестный id
+# Ожидается: 404
+# {"error": {"code": "not_found", "message": "запрошенный ресурс не найден"}}
+GET {{baseUrl}}/notes/00000000-0000-4000-8000-000000000000
+
+### 10. ОШИБКА: PATCH на несуществующий id ничего не создаёт
+# Ожидается: 404, а не 201 и не «создам, раз просят»
+PATCH {{baseUrl}}/notes/00000000-0000-4000-8000-000000000000
+Content-Type: application/json
+
+{
+  "title": "Новое имя"
+}
+
+### 11. ОШИБКА: PATCH без единого поля
+# Ожидается: 400
+# {"error": {"code": "empty_patch", "message": "тело не содержит ни одного изменяемого поля"}}
+# Подставьте реальный id из запроса 2.
+PATCH {{baseUrl}}/notes/ВСТАВЬТЕ-ID
+Content-Type: application/json
+
+{}
+
+### 12. ОШИБКА: неизвестный query-параметр
+# Ожидается: 400
+# {"error": {"code": "unknown_field", "message": "foo: неизвестный параметр запроса", "field": "foo"}}
+# Строгость к query такая же, как к телу: лишний параметр — ошибка.
+GET {{baseUrl}}/notes?foo=bar
+
+### 13. ОШИБКА: метод не поддерживается
+# Ожидается: 405 и заголовок Allow: GET, POST
+PUT {{baseUrl}}/notes
+Content-Type: application/json
+
+{
+  "title": "Так нельзя"
+}
